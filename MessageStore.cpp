@@ -229,4 +229,7 @@ void MessageStore::clearCredentials()
 {
     QSqlQuery query;
     query.exec("DELETE FROM auth"); // Удаляем единственную запись с логином/паролем
+    query.exec("DELETE FROM messages"); // Удаляет все сообщения
+    query.exec("DELETE FROM contacts"); // Удаляет все контакты
+    m_conversations.clear();
 }
