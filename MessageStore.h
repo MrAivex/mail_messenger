@@ -40,6 +40,8 @@ public:
     bool isContact(const QString &email) const;
     QStringList getFullContactList() const; // Чтобы загрузить их при старте
 
+    void clearCredentials();
+
 signals:
     void messageAdded(const QString &address);
 

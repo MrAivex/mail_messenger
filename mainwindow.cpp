@@ -25,6 +25,11 @@ MainWindow::MainWindow(QWidget *parent)
 
                 if (chatPage) delete chatPage;
                 chatPage = new ChatWidget(email, password, store);
+
+                connect(chatPage, &ChatWidget::logoutRequested, this, [this]() {
+                    stack->setCurrentWidget(loginPage); // Переключаем на окно входа
+                });
+
                 stack->addWidget(chatPage);
                 stack->setCurrentWidget(chatPage);
             });

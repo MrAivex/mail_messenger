@@ -29,6 +29,9 @@ ChatWidget::ChatWidget(const QString &email, const QString &password,
     addContactButton = new QPushButton("➕ Добавить контакт", this);
     addContactButton->setStyleSheet("padding: 8px; font-weight: bold;");
 
+    logoutButton = new QPushButton("🚪 Выйти", this);
+    logoutButton->setStyleSheet("color: red; font-weight: bold; padding: 5px;");
+
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
     QHBoxLayout *toLayout = new QHBoxLayout;
@@ -60,6 +63,7 @@ ChatWidget::ChatWidget(const QString &email, const QString &password,
     leftLayout->addWidget(contactsLabel);
     leftLayout->addWidget(addContactButton); // Кнопка сверху
     leftLayout->addWidget(contactList);      // Список под ней
+    leftLayout->addWidget(logoutButton);
 
     QSplitter *splitter = new QSplitter(Qt::Horizontal);
     QWidget *rightWidget = new QWidget;
@@ -82,6 +86,7 @@ ChatWidget::ChatWidget(const QString &email, const QString &password,
     connect(sendButton, &QPushButton::clicked, this, &ChatWidget::sendMessage);
     connect(messageEdit, &QLineEdit::returnPressed, this, &ChatWidget::sendMessage);
     connect(addContactButton, &QPushButton::clicked, this, &ChatWidget::onAddContactClicked);
+    connect(logoutButton, &QPushButton::clicked, this, &ChatWidget::onLogoutClicked);
 
     updateContactList();
 }
@@ -219,4 +224,16 @@ void ChatWidget::onAddContactClicked()
 
         QMessageBox::information(this, "Успех", "Контакт добавлен!");
     }
+}
+
+void ChatWidget::onLogoutClicked()
+{
+    // Останавливаем проверку почты
+    pop3->stopChecking();
+
+    // Очищаем учетные данные в БД
+    store->clearCredentials();
+
+    // Сообщаем главному окну, что нужно вернуться на страницу входа
+    emit logoutRequested();
 }

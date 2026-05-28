@@ -21,6 +21,9 @@ public:
                         MessageStore *store, QWidget *parent = nullptr);
     ~ChatWidget();
 
+signals:
+    void logoutRequested();
+
 private slots:
     void onContactSelected(QListWidgetItem *item);
     void onStartChat();
@@ -30,6 +33,7 @@ private slots:
     void onSmtpError(const QString &error);
     void onPop3Error(const QString &error);
     void onAddContactClicked();
+    void onLogoutClicked();
 
 private:
     void loadChatWith(const QString &address);
@@ -54,6 +58,7 @@ private:
     QString activeContact;
 
     QPushButton *addContactButton;
+    QPushButton *logoutButton;
 };
 
 #endif // CHATWIDGET_H

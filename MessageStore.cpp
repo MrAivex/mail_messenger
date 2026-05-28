@@ -208,3 +208,9 @@ QStringList MessageStore::getFullContactList() const {
 
     return contacts;
 }
+
+void MessageStore::clearCredentials()
+{
+    QSqlQuery query;
+    query.exec("DELETE FROM auth"); // Удаляем единственную запись с логином/паролем
+}
