@@ -61,23 +61,49 @@ void Pop3Client::checkMail()
 
 void Pop3Client::onReadyRead()
 {
-    // Считываем всё, что пришло в сокет, и добавляем в накопительный буфер
+    // Добавляем новые данные в буфер
     buffer.append(socket->readAll());
 
-    // Важно: обрабатываем буфер, пока в нем есть символ конца строки
+    // Если мы в режиме скачивания письма (RETR), нам НЕЛЬЗЯ читать по строкам,
+    // потому что письмо — это один большой кусок данных.
+    if (step == 4) {
+        // Проверяем, пришел ли маркер конца письма POP3: "\r\n.\r\n"
+        if (buffer.contains("\r\n.\r\n")) {
+            int dotIndex = buffer.indexOf("\r\n.\r\n");
+
+            // Забираем всё тело письма до точки
+            QByteArray fullMailData = buffer.left(dotIndex);
+            // Удаляем обработанное письмо и маркер из буфера
+            buffer.remove(0, dotIndex + 5);
+
+            mailRetrievalInProgress = false;
+
+            // Парсим накопленное письмо (используем ваш метод)
+            QList<Message> msgs = processRetrievedMessage(fullMailData);
+            if (!msgs.isEmpty()) {
+                emit newMessages(msgs);
+            }
+
+            // Переходим к следующему или выходим
+            if (currentMessageIndex < totalMessages) {
+                currentMessageIndex++;
+                sendCommand(QString("RETR %1\r\n").arg(currentMessageIndex));
+            } else {
+                sendCommand("QUIT\r\n");
+                step = 5;
+            }
+        }
+        return; // Выходим, пока не получим всю точку целиком
+    }
+
+    // Логика для команд (USER, PASS, STAT) — здесь читаем построчно
     while (buffer.contains('\n')) {
         int nIndex = buffer.indexOf('\n');
-        // Извлекаем одну строку
         QByteArray lineData = buffer.left(nIndex).trimmed();
-        // УДАЛЯЕМ извлеченную строку из буфера (включая символ \n)
         buffer.remove(0, nIndex + 1);
 
-        if (lineData.isEmpty() && !mailRetrievalInProgress) continue;
-
+        if (lineData.isEmpty()) continue;
         QString line = QString::fromUtf8(lineData);
-
-        // УБЕРИТЕ или закомментируйте qDebug здесь, если писем много!
-        // qDebug() << "S:" << line;
 
         if (line.startsWith("-ERR")) {
             emit errorOccurred("POP3 Error: " + line);
@@ -86,7 +112,6 @@ void Pop3Client::onReadyRead()
             return;
         }
 
-        // Переключение состояний (Steps)
         if (step == 0 && line.startsWith("+OK")) {
             sendCommand("USER " + email + "\r\n");
             step = 1;
@@ -102,40 +127,16 @@ void Pop3Client::onReadyRead()
                 totalMessages = parts.at(1).toInt();
                 if (totalMessages > 0) {
                     currentMessageIndex = 1;
-                    currentMail.clear();
-                    mailRetrievalInProgress = true;
+                    step = 4; // Переходим в режим RETR
                     sendCommand("RETR 1\r\n");
-                    step = 4;
                 } else {
                     sendCommand("QUIT\r\n");
                     step = 5;
                 }
-            }
-        } else if (step == 4) {
-            // Режим накопления письма
-            if (line == "." || line.trimmed() == ".") {
-                mailRetrievalInProgress = false;
-                QList<Message> msgs = processRetrievedMessage(currentMail);
-                if (!msgs.isEmpty()) {
-                    emit newMessages(msgs);
-                }
-
-                if (currentMessageIndex < totalMessages) {
-                    currentMessageIndex++;
-                    currentMail.clear();
-                    mailRetrievalInProgress = true;
-                    sendCommand(QString("RETR %1\r\n").arg(currentMessageIndex));
-                } else {
-                    sendCommand("QUIT\r\n");
-                    step = 5;
-                }
-            } else {
-                // Добавляем строку в текущее письмо
-                currentMail.append(lineData + "\n");
             }
         } else if (step == 5 && line.startsWith("+OK")) {
             socket->disconnectFromHost();
-            isProcessing = false; // ОСВОБОЖДАЕМ флаг здесь
+            isProcessing = false;
         }
     }
 }
@@ -143,15 +144,17 @@ void Pop3Client::onReadyRead()
 void Pop3Client::onError(QAbstractSocket::SocketError error)
 {
     isProcessing = false;
-    Q_UNUSED(error);
+
+    if (error == QAbstractSocket::RemoteHostClosedError) {
+        return;
+    }
+
     emit errorOccurred(socket->errorString());
-    timer->stop();
 }
 
 void Pop3Client::sendCommand(const QString &cmd)
 {
     socket->write(cmd.toUtf8());
-    // qDebug() << "POP3 C:" << cmd.trimmed();
 }
 
 QList<Message> Pop3Client::processRetrievedMessage(const QByteArray &rawMail)
@@ -162,82 +165,39 @@ QList<Message> Pop3Client::processRetrievedMessage(const QByteArray &rawMail)
 
     Message msg;
     msg.incoming = true;
-
-    // 1. Извлекаем Отправителя
-    QRegularExpression fromRe("From:.*<([^>]+)>", QRegularExpression::CaseInsensitiveOption);
-    auto fromMatch = fromRe.match(mail);
-    msg.from = fromMatch.hasMatch() ? fromMatch.captured(1).trimmed() : "Unknown";
-
-    // 2. ID (используем для уникальности)
-    QRegularExpression msgIdRe("Message-ID:\\s*([^\\r\\n]+)", QRegularExpression::CaseInsensitiveOption);
-    auto msgIdMatch = msgIdRe.match(mail);
-    msg.messageId = msgIdMatch.hasMatch() ? msgIdMatch.captured(1).trimmed() : QString::number(qHash(mail));
-
-    // 3. Улучшенный поиск текста
-    QString finalBody = "";
-    int headerEnd = mail.indexOf("\r\n\r\n");
-
-    if (headerEnd != -1) {
-        QString fullBody = mail.mid(headerEnd + 4);
-
-        // Если это MIME (сложное письмо)
-        if (fullBody.contains("Content-Type:", Qt::CaseInsensitive)) {
-            // Ищем сначала text/plain, если нет - text/html
-            QRegularExpression mimeRe("Content-Type: text/(plain|html);.*?\r\n\r\n(.*?)(?=\r\n--|$)",
-                                      QRegularExpression::DotMatchesEverythingOption | QRegularExpression::CaseInsensitiveOption);
-
-            auto matchIt = mimeRe.globalMatch(fullBody);
-            QString htmlContent = "";
-            QString plainContent = "";
-
-            while (matchIt.hasNext()) {
-                auto match = matchIt.next();
-                QString type = match.captured(1).toLower();
-                QString content = match.captured(2).trimmed();
-
-                // Проверяем кодировку конкретной части
-                if (fullBody.contains("Content-Transfer-Encoding: base64", Qt::CaseInsensitive)) {
-                    content = QString::fromUtf8(QByteArray::fromBase64(content.toUtf8()));
-                } else if (fullBody.contains("Content-Transfer-Encoding: quoted-printable", Qt::CaseInsensitive)) {
-                    content.replace("=\r\n", "");
-                    content.replace("=\n", "");
-                    QRegularExpression hexRe("=([0-9A-F]{2})");
-                    auto it = hexRe.globalMatch(content);
-                    while (it.hasNext()) {
-                        auto m = it.next();
-                        bool ok;
-                        char ch = static_cast<char>(m.captured(1).toInt(&ok, 16));
-                        if (ok) content.replace(m.captured(0), QString(ch));
-                    }
-                }
-
-                if (type == "plain") plainContent = content;
-                else if (type == "html") htmlContent = content;
-            }
-            finalBody = !plainContent.isEmpty() ? plainContent : htmlContent;
-        } else {
-            finalBody = fullBody;
-        }
-
-        // Чистим от HTML
-        finalBody.remove(QRegularExpression("<[^>]*>"));
-        finalBody.replace("&nbsp;", " ");
-        finalBody.replace("&quot;", "\"");
-        finalBody.replace("&amp;", "&");
-
-        // Убираем точку протокола в конце
-        if (finalBody.endsWith("\r\n.")) finalBody.chop(3);
-    }
-
-    msg.text = finalBody.trimmed();
-
-    // Если всё еще пусто, берем первые 200 символов сырого тела для отладки
-    if (msg.text.isEmpty()) {
-        msg.text = "(Сложное содержимое: вложения или графика)";
-    }
-
     msg.dateTime = QDateTime::currentDateTime();
     msg.to = email;
+
+    // 1. Извлекаем отправителя и ID (ваша текущая логика верна)
+    QRegularExpression fromRe("From:\\s*(?:.*<)?([^>\\s]+@[^>\\s]+)(?:>)?", QRegularExpression::CaseInsensitiveOption);
+    msg.from = fromRe.match(mail).captured(1).trimmed().toLower();
+
+    QRegularExpression msgIdRe("Message-ID:\\s*<([^>]+)>", QRegularExpression::CaseInsensitiveOption);
+    msg.messageId = msgIdRe.match(mail).captured(1).trimmed();
+    if(msg.messageId.isEmpty()) msg.messageId = QString::number(qHash(mail));
+
+    // 2. Находим тело письма
+    int headerEnd = mail.indexOf("\r\n\r\n");
+    QString body = (headerEnd != -1) ? mail.mid(headerEnd + 4) : mail;
+
+    // 3. ДЕКОДИРОВАНИЕ BASE64 (Решение вашей проблемы)
+    // Если в письме есть заголовок о Base64
+    if (mail.contains("Content-Transfer-Encoding: base64", Qt::CaseInsensitive)) {
+        // Извлекаем только блок данных (до следующего разделителя или конца)
+        QRegularExpression base64DataRe("(?:\r\n\r\n|^)([A-Za-z0-9+/=\r\n]+)(?=\r\n--|$)");
+        auto match = base64DataRe.match(body);
+        if (match.hasMatch()) {
+            QByteArray decoded = QByteArray::fromBase64(match.captured(1).toUtf8());
+            body = QString::fromUtf8(decoded);
+        }
+    }
+
+    // 4. Очистка от HTML и подписей Mail.ru
+    body.remove(QRegularExpression("<[^>]*>"));
+    body = body.split("--").at(0); // Отрезаем подписи после разделителя "--"
+
+    msg.text = body.trimmed();
+    if (msg.text.isEmpty()) msg.text = "[Письмо без текста]";
 
     messages.append(msg);
     return messages;

@@ -62,8 +62,9 @@ ChatWidget::ChatWidget(const QString &email, const QString &password,
     leftLayout->setContentsMargins(0, 0, 0, 0);
     leftLayout->addWidget(contactsLabel);
     leftLayout->addWidget(addContactButton); // Кнопка сверху
-    leftLayout->addWidget(contactList);      // Список под ней
-    leftLayout->addWidget(logoutButton);
+    leftLayout->addWidget(contactList);
+    leftLayout->addWidget(logoutButton);    // Список под ней
+
 
     QSplitter *splitter = new QSplitter(Qt::Horizontal);
     QWidget *rightWidget = new QWidget;
@@ -148,12 +149,16 @@ void ChatWidget::sendMessage()
     messageEdit->clear();
 }
 
-void ChatWidget::onNewMessages(const QList<Message> &messages)
-{
+void ChatWidget::onNewMessages(const QList<Message> &messages) {
     for (const Message &msg : messages) {
-        // Игнорируем свои же письма, чтобы не дублировать отправленные
-        if (msg.from == myEmail)
+        if (msg.from == myEmail) continue;
+
+        // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ:
+        if (store->hasMessageId(msg.messageId)) {
+            // Пропускаем, если уже есть
             continue;
+        }
+
         store->addIncomingMessage(msg.from, myEmail, msg.text, msg.messageId, msg.dateTime);
     }
 }
@@ -194,6 +199,13 @@ void ChatWidget::updateContactList()
 
 void ChatWidget::onSmtpError(const QString &error)
 {
+    if (error.contains("TLS/SSL connection has been closed", Qt::CaseInsensitive) ||
+        error.contains("The remote host closed the connection", Qt::CaseInsensitive))
+    {
+        qDebug() << "SMTP Session closed by server (normal after delivery):" << error;
+        return;
+    }
+
     chatView->append("Ошибка отправки: " + error);
 }
 

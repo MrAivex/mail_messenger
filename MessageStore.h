@@ -41,13 +41,13 @@ public:
     QStringList getFullContactList() const; // Чтобы загрузить их при старте
 
     void clearCredentials();
+    bool hasMessageId(const QString &id) const;
 
 signals:
     void messageAdded(const QString &address);
 
 private:
     void initDb(); // Метод инициализации
-    bool hasMessageId(const QString &id) const;
     QMap<QString, QList<Message>> m_conversations;
     QSqlDatabase db;
 };

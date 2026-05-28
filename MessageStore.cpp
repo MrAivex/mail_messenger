@@ -99,18 +99,36 @@ void MessageStore::addIncomingMessage(const QString &from, const QString &to,
 {
     if (!isContact(from)) return;
 
+    // Если контакта нет, автоматически добавляем его, чтобы чат появился в списке
+    if (!isContact(from)) {
+        addContact(from, from.split('@').at(0));
+    }
+
     if (hasMessageId(messageId)) return;
 
     Message msg;
-    msg.from = from;
-    msg.to = to;
+    msg.from = from.toLower().trimmed();
+    msg.to = to.toLower().trimmed();
     msg.text = text;
     msg.dateTime = dateTime.isValid() ? dateTime : QDateTime::currentDateTime();
     msg.incoming = true;
     msg.messageId = messageId;
 
-    m_conversations[from].append(msg);
-    emit messageAdded(from);
+    qDebug() << "Сохранение входящего от:" << from;
+
+    // Сохраняем в память и в базу
+    m_conversations[msg.from].append(msg);
+
+    QSqlQuery query;
+    query.prepare("INSERT INTO messages (msg_id, sender, receiver, body, timestamp) VALUES (?, ?, ?, ?, ?)");
+    query.addBindValue(messageId);
+    query.addBindValue(msg.from);
+    query.addBindValue(msg.to);
+    query.addBindValue(text);
+    query.addBindValue(msg.dateTime.toString(Qt::ISODate));
+    query.exec();
+
+    emit messageAdded(msg.from);
 }
 
 QList<Message> MessageStore::getConversation(const QString &address) const
@@ -130,16 +148,16 @@ QStringList MessageStore::contactAddresses() const
     return keys;
 }
 
-bool MessageStore::hasMessageId(const QString &id) const
-{
-    if (id.isEmpty()) return false;
-    // Используем итератор для быстрого поиска
-    for (auto it = m_conversations.constBegin(); it != m_conversations.constEnd(); ++it) {
-        for (const Message &m : it.value()) {
-            if (m.messageId == id) return true;
-        }
+bool MessageStore::hasMessageId(const QString &id) const {
+    QSqlQuery query;
+    query.prepare("SELECT msg_id FROM messages WHERE msg_id = ?");
+    query.addBindValue(id);
+    query.exec();
+    bool exists = query.next();
+    if (exists) {
+        qDebug() << "Сообщение уже есть в БД, пропускаем:" << id;
     }
-    return false;
+    return exists;
 }
 
 void MessageStore::addContact(const QString &email, const QString &name) {
@@ -184,9 +202,7 @@ void MessageStore::loadMessagesFromDb(const QString &myEmail) {
         // Если я отправитель, кладем в папку получателя. Если я получатель — в папку отправителя.
         QString partner = (msg.from == myEmail) ? msg.to : msg.from;
 
-        if (!hasMessageId(msg.messageId)) {
-            m_conversations[partner].append(msg);
-        }
+        m_conversations[partner].append(msg);
     }
 }
 
